@@ -1,4 +1,4 @@
-# nbody sim in webgpu typescript vite
+# nbody simulation
 
 this is an n-body simulation implemented in webgpu using typescript and vite. the simulation renders particles using compute and render shaders.
 
