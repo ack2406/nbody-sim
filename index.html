@@ -4,10 +4,21 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>N Body Simulation</title>
-    <script type="module" crossorigin src="/nbody-sim/assets/index-B2DjSsOb.js"></script>
-    <link rel="stylesheet" crossorigin href="/nbody-sim/assets/index-CtgNSYxv.css">
+    <script type="module" crossorigin src="/nbody-sim/assets/index-VE4KuywX.js"></script>
+    <link rel="stylesheet" crossorigin href="/nbody-sim/assets/index-CsxqpCOs.css">
   </head>
   <body>
+    <div id="ui">
+      <div class="option-row">
+        <label for="particleCount">Particles:</label>
+        <input id="particleCount" type="number" value="50" min="1" max="1000" />
+      </div>
+      <div class="option-row">
+        <label for="gParam">G value:</label>
+        <input id="gParam" type="number" step="0.001" value="1" min="0" />
+      </div>
+      <button id="restartButton">restart</button>
+    </div>
     <canvas></canvas>
   </body>
 </html>
