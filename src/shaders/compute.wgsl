@@ -12,6 +12,7 @@ var<storage, read_write> particles: array<Particle>;
 
 struct Params {
   dt: f32,
+  g: f32,
 };
 
 @group(0) @binding(1)
@@ -33,8 +34,6 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   // softening factor to prevent singularities
   let softening: f32 = 0.1;
 
-  let G: f32 = 0.000001;
-
   // calculate acceleration
   var a: vec2<f32> = vec2<f32>(0.0, 0.0);
   for (var j: u32 = 0u; j < arrayLength(&particles); j = j + 1u) {
@@ -48,7 +47,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let invDist = 1.0 / sqrt(distSq);
     let invDistCube = invDist * invDist * invDist;
 
-    a = a + G * particles[j].mass * r_vec * invDistCube;
+    a = a + params.g * particles[j].mass * r_vec * invDistCube / 1000000;
   }
 
   // update velocity and position

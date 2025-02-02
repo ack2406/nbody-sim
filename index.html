@@ -7,6 +7,17 @@
     <title>N Body Simulation</title>
   </head>
   <body>
+    <div id="ui">
+      <div class="option-row">
+        <label for="particleCount">Particles:</label>
+        <input id="particleCount" type="number" value="50" min="1" max="1000" />
+      </div>
+      <div class="option-row">
+        <label for="gParam">G value:</label>
+        <input id="gParam" type="number" step="0.001" value="1" min="0" />
+      </div>
+      <button id="restartButton">restart</button>
+    </div>
     <canvas></canvas>
     <script type="module" src="/src/main.ts"></script>
   </body>
