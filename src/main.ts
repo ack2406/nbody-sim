@@ -1,11 +1,31 @@
 import renderShaderCode from "./shaders/render.wgsl?raw";
 import computeShaderCode from "./shaders/compute.wgsl?raw";
 
-const PARTICLES_COUNT = 3;
+const PARTICLES_COUNT = 50;
 
 // random float in [min, max)
 function rand(min: number, max: number) {
   return min + Math.random() * (max - min);
+}
+
+function randNormal(mean: number, stdDev: number) {
+  const u1 = Math.random();
+  const u2 = Math.random();
+  const z = Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2);
+
+  return mean + z * stdDev;
+}
+
+function randNormalClamped(
+  mean: number,
+  stdDev: number,
+  minVal: number,
+  maxVal: number
+) {
+  let val = randNormal(mean, stdDev);
+  if (val < minVal) val = minVal;
+  if (val > maxVal) val = maxVal;
+  return val;
 }
 
 function generateCircleData(segments: number) {
@@ -123,7 +143,7 @@ for (let i = 0; i < PARTICLES_COUNT; i++) {
   const baseByte = i * particleUnitSize;
   const baseFloat = i * 8;
 
-  const mass = rand(0.5, 5);
+  const mass = randNormalClamped(1, 1, 0.3, 10);
 
   // color (4 bytes)
   particleU8[baseByte + 0] = Math.floor(rand(100, 255)); // R
