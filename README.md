@@ -2,7 +2,7 @@
 
 this is an n-body simulation implemented in webgpu using typescript and vite. the simulation renders particles using compute and render shaders.
 
-check out the demo on [github](https://github.com/ack2406/nbody-sim)
+check out the [demo](https://ack2406.github.io/nbody-sim/)
 
 ## installation
 
