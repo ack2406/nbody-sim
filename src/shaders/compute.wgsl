@@ -31,9 +31,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
   let myRadius = particles[i].radius;
 
   // softening factor to prevent singularities
-  let softening: f32 = 0.05;
+  let softening: f32 = 0.1;
 
-  let G: f32 = 0.001;
+  let G: f32 = 0.000001;
 
   // calculate acceleration
   var a: vec2<f32> = vec2<f32>(0.0, 0.0);

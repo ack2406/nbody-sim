@@ -1,278 +1,210 @@
-import renderShaderCode from "./shaders/render.wgsl?raw";
-import computeShaderCode from "./shaders/compute.wgsl?raw";
+import { rand, randNormalClamped } from "./random";
+import { generateCircleData } from "./geometry";
+import { initWebGPU } from "./gpu-setup";
+import {
+  createRenderPipelineAndBindGroup,
+  createComputePipelineAndBindGroup,
+} from "./pipelines";
 
-const PARTICLES_COUNT = 50;
+// total number of particles in the simulation
+const PARTICLES_COUNT = 10000;
 
-// random float in [min, max)
-function rand(min: number, max: number) {
-  return min + Math.random() * (max - min);
-}
+// entry point for the app
+start();
 
-function randNormal(mean: number, stdDev: number) {
-  const u1 = Math.random();
-  const u2 = Math.random();
-  const z = Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2);
-
-  return mean + z * stdDev;
-}
-
-function randNormalClamped(
-  mean: number,
-  stdDev: number,
-  minVal: number,
-  maxVal: number
-) {
-  let val = randNormal(mean, stdDev);
-  if (val < minVal) val = minVal;
-  if (val > maxVal) val = maxVal;
-  return val;
-}
-
-function generateCircleData(segments: number) {
-  const vertexData: number[] = [];
-  const indexData: number[] = [];
-
-  // circle center
-  vertexData.push(0, 0);
-
-  for (let i = 0; i <= segments; i++) {
-    const angle = (i / segments) * Math.PI * 2;
-    const x = Math.cos(angle);
-    const y = Math.sin(angle);
-    vertexData.push(x, y);
+async function start() {
+  // get the canvas from the html
+  const canvas = document.querySelector<HTMLCanvasElement>("canvas");
+  if (!canvas) {
+    throw new Error("canvas not found");
   }
 
-  for (let i = 1; i < segments; i++) {
-    indexData.push(0, i, i + 1);
+  // initialize webgpu
+  const { device, context, presentationFormat } = await initWebGPU(canvas);
+
+  // create a buffer for passing aspect ratio to the render shader
+  const renderUniformBuffer = device.createBuffer({
+    size: 4,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+  });
+
+  // create a buffer for passing delta time (dt) to the compute shader
+  const paramsBuffer = device.createBuffer({
+    size: 4,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+  });
+
+  // create the render pipeline and bind group
+  const { renderPipeline, renderBindGroup } = createRenderPipelineAndBindGroup(
+    device,
+    presentationFormat,
+    renderUniformBuffer
+  );
+
+  // create the particle buffer
+  // each particle has 32 bytes: color(4), radius(4), offset(8), velocity(8), mass(4), padding(4)
+  const particleUnitSize = 32;
+  const particleBufferSize = PARTICLES_COUNT * particleUnitSize;
+  const particleArray = new ArrayBuffer(particleBufferSize);
+  const particleU8 = new Uint8Array(particleArray);
+  const particleF32 = new Float32Array(particleArray);
+
+  // fill the particle data with random values
+  for (let i = 0; i < PARTICLES_COUNT; i++) {
+    const baseByte = i * particleUnitSize;
+    const baseFloat = i * 8;
+
+    // pick a random mass using normal distribution, then clamp
+    const mass = randNormalClamped(1, 1, 0.3, 10);
+
+    // color (4 bytes: r, g, b, a)
+    particleU8[baseByte + 0] = Math.floor(rand(100, 255));
+    particleU8[baseByte + 1] = Math.floor(rand(100, 255));
+    particleU8[baseByte + 2] = Math.floor(rand(200, 255));
+    particleU8[baseByte + 3] = 255;
+
+    // radius (float32) = mass * 0.01
+    particleF32[baseFloat + 1] = mass * 0.01;
+
+    // position (float32x2)
+    const angle = rand(0, 2 * Math.PI);
+    const radius = Math.sqrt(rand(0, 1)); // sqrt to ensure uniform distribution
+    particleF32[baseFloat + 2] = radius * Math.cos(angle);
+    particleF32[baseFloat + 3] = radius * Math.sin(angle);
+
+    // velocity (float32x2)
+    particleF32[baseFloat + 4] = 0;
+    particleF32[baseFloat + 5] = 0;
+
+    // mass (float32)
+    particleF32[baseFloat + 6] = mass;
+
+    // padding (float32)
+    particleF32[baseFloat + 7] = 0;
   }
-  indexData.push(0, segments, 1);
 
-  return {
-    vertexData: new Float32Array(vertexData),
-    indexData: new Uint32Array(indexData),
-    numVertices: indexData.length,
-  };
-}
+  // create a gpu buffer for particle data
+  const particleBuffer = device.createBuffer({
+    size: particleBufferSize,
+    usage:
+      GPUBufferUsage.VERTEX | GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+  });
+  // copy the array data to the gpu buffer
+  device.queue.writeBuffer(particleBuffer, 0, particleArray);
 
-// init WebGPU
-const canvas = document.querySelector<HTMLCanvasElement>("canvas")!;
-if (!canvas) throw new Error("Canvas not found");
+  // generate circle geometry for rendering each particle
+  const { vertexData, indexData, numVertices } = generateCircleData(100);
 
-const context = canvas.getContext("webgpu")!;
-const adapter = await navigator.gpu.requestAdapter();
-if (!adapter) throw new Error("WebGPU not supported");
-const device = await adapter.requestDevice();
+  // create a vertex buffer for the circle
+  const vertexBuffer = device.createBuffer({
+    size: vertexData.byteLength,
+    usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+  });
+  device.queue.writeBuffer(vertexBuffer, 0, vertexData);
 
-const presentationFormat = navigator.gpu.getPreferredCanvasFormat();
-context.configure({
-  device,
-  format: presentationFormat,
-});
+  // create an index buffer for the circle
+  const indexBuffer = device.createBuffer({
+    size: indexData.byteLength,
+    usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
+  });
+  device.queue.writeBuffer(indexBuffer, 0, indexData);
 
-// render uniform for aspect = canvas.width / canvas.height
-const renderUniformBuffer = device.createBuffer({
-  size: 4,
-  usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-});
+  // create the compute pipeline and bind group
+  const { computePipeline, computeBindGroup } =
+    createComputePipelineAndBindGroup(device, particleBuffer, paramsBuffer);
 
-const renderPipeline = device.createRenderPipeline({
-  layout: "auto",
-  vertex: {
-    module: device.createShaderModule({ code: renderShaderCode }),
-    entryPoint: "vs",
-    buffers: [
+  // set up a render pass descriptor for drawing
+  const renderPassDescriptor = {
+    colorAttachments: [
       {
-        // circle geometry buffer
-        arrayStride: 8, // = 2 * sizeof(float32)
-        attributes: [
-          {
-            shaderLocation: 0, // position
-            offset: 0,
-            format: "float32x2",
-          },
-        ],
-      },
-      {
-        arrayStride: 32, // 4 color + 4 radius + 8 offset + 8 velocity + 4 mass + 4 padding
-        stepMode: "instance",
-        attributes: [
-          {
-            shaderLocation: 1, // color
-            offset: 0,
-            format: "unorm8x4",
-          },
-          {
-            shaderLocation: 2, // radius
-            offset: 4,
-            format: "float32",
-          },
-          {
-            shaderLocation: 3, // offset
-            offset: 8,
-            format: "float32x2",
-          },
-          // velocity and mass are not used in this shader
-        ],
-      },
+        view: undefined as unknown as GPUTextureView,
+        clearValue: { r: 0.05, g: 0.05, b: 0.1, a: 1.0 },
+        loadOp: "clear",
+        storeOp: "store",
+      } as GPURenderPassColorAttachment,
     ],
-  },
-  fragment: {
-    module: device.createShaderModule({ code: renderShaderCode }),
-    entryPoint: "fs",
-    targets: [{ format: presentationFormat }],
-  },
-});
+  };
 
-const renderBindGroup = device.createBindGroup({
-  layout: renderPipeline.getBindGroupLayout(0),
-  entries: [
+  // resize observer updates the canvas size
+  const observer = new ResizeObserver((entries) => {
+    for (const entry of entries) {
+      const { width, height } = entry.contentRect;
+      canvas.width = width;
+      canvas.height = height;
+    }
+  });
+  observer.observe(canvas);
+
+  let lastFrameTime = performance.now();
+
+  // animation loop
+  function frame() {
+    if (!canvas) {
+      throw new Error("canvas not found");
+    }
+
+    const now = performance.now();
+    // calculate delta time in seconds
+    const dt = (now - lastFrameTime) / 1000;
+    lastFrameTime = now;
+
+    // write delta time into the params buffer for the compute shader
+    device.queue.writeBuffer(paramsBuffer, 0, new Float32Array([dt]));
+
+    // calculate aspect ratio and send it to the render shader
+    const aspect = canvas.width / canvas.height;
+    device.queue.writeBuffer(
+      renderUniformBuffer,
+      0,
+      new Float32Array([aspect])
+    );
+
+    // create a command encoder to record gpu commands
+    const commandEncoder = device.createCommandEncoder();
+
+    // begin compute pass
     {
-      binding: 0,
-      resource: { buffer: renderUniformBuffer },
-    },
-  ],
-});
+      const computePass = commandEncoder.beginComputePass();
+      computePass.setPipeline(computePipeline);
+      computePass.setBindGroup(0, computeBindGroup);
 
-const particleUnitSize = 32; // bytes per particle
-const particleBufferSize = PARTICLES_COUNT * particleUnitSize;
-const particleArray = new ArrayBuffer(particleBufferSize);
-const particleU8 = new Uint8Array(particleArray);
-const particleF32 = new Float32Array(particleArray);
+      // use 64 threads per workgroup
+      const workgroupSize = 64;
+      // calculate how many workgroups we need for all particles
+      const workgroupCount = Math.ceil(PARTICLES_COUNT / workgroupSize);
 
-for (let i = 0; i < PARTICLES_COUNT; i++) {
-  const baseByte = i * particleUnitSize;
-  const baseFloat = i * 8;
+      computePass.dispatchWorkgroups(workgroupCount);
+      computePass.end();
+    }
 
-  const mass = randNormalClamped(1, 1, 0.3, 10);
-
-  // color (4 bytes)
-  particleU8[baseByte + 0] = Math.floor(rand(100, 255)); // R
-  particleU8[baseByte + 1] = Math.floor(rand(100, 255)); // G
-  particleU8[baseByte + 2] = Math.floor(rand(200, 255)); // B
-  particleU8[baseByte + 3] = 255; // A
-
-  // radius (1 byte)
-  particleF32[baseFloat + 1] = mass * 0.01;
-
-  // offset (2 bytes)
-  particleF32[baseFloat + 2] = rand(-1, 1);
-  particleF32[baseFloat + 3] = rand(-1, 1);
-
-  // velocity (2 bytes)
-  particleF32[baseFloat + 4] = rand(0, 0);
-  particleF32[baseFloat + 5] = rand(0, 0);
-
-  // mass (1 byte)
-  particleF32[baseFloat + 6] = mass;
-
-  // padding (1 byte)
-  particleF32[baseFloat + 7] = 0;
-}
-
-const particleBuffer = device.createBuffer({
-  size: particleBufferSize,
-  usage:
-    GPUBufferUsage.VERTEX | GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-});
-device.queue.writeBuffer(particleBuffer, 0, particleArray);
-
-// particle geometry
-const { vertexData, indexData, numVertices } = generateCircleData(100);
-const vertexBuffer = device.createBuffer({
-  size: vertexData.byteLength,
-  usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-});
-device.queue.writeBuffer(vertexBuffer, 0, vertexData);
-
-const indexBuffer = device.createBuffer({
-  size: indexData.byteLength,
-  usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
-});
-device.queue.writeBuffer(indexBuffer, 0, indexData);
-
-// delta time
-const paramsBuffer = device.createBuffer({
-  size: 4,
-  usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-});
-
-const computeShaderModule = device.createShaderModule({
-  code: computeShaderCode,
-});
-const computePipeline = device.createComputePipeline({
-  layout: "auto",
-  compute: {
-    module: computeShaderModule,
-    entryPoint: "main",
-  },
-});
-const computeBindGroup = device.createBindGroup({
-  layout: computePipeline.getBindGroupLayout(0),
-  entries: [
-    { binding: 0, resource: { buffer: particleBuffer } },
-    { binding: 1, resource: { buffer: paramsBuffer } },
-  ],
-});
-
-const renderPassDescriptor = {
-  colorAttachments: [
+    // begin render pass
     {
-      view: undefined as unknown as GPUTextureView,
-      clearValue: { r: 0.1, g: 0.1, b: 0.15, a: 1.0 },
-      loadOp: "clear",
-      storeOp: "store",
-    } as GPURenderPassColorAttachment,
-  ],
-};
+      // get the current texture from the swap chain
+      renderPassDescriptor.colorAttachments[0].view = context
+        .getCurrentTexture()
+        .createView();
 
-let lastFrameTime = performance.now();
-function frame() {
-  const now = performance.now();
-  const dt = (now - lastFrameTime) / 1000;
-  lastFrameTime = now;
+      const renderPass = commandEncoder.beginRenderPass(renderPassDescriptor);
+      renderPass.setBindGroup(0, renderBindGroup);
+      renderPass.setPipeline(renderPipeline);
 
-  // update delta time
-  device.queue.writeBuffer(paramsBuffer, 0, new Float32Array([dt]));
+      // set circle geometry (vertex/index) and particle buffer
+      renderPass.setVertexBuffer(0, vertexBuffer);
+      renderPass.setVertexBuffer(1, particleBuffer);
+      renderPass.setIndexBuffer(indexBuffer, "uint32");
 
-  // update aspect ratio
-  const aspect = canvas.width / canvas.height;
-  device.queue.writeBuffer(renderUniformBuffer, 0, new Float32Array([aspect]));
+      // draw all particles using instanced rendering
+      renderPass.drawIndexed(numVertices, PARTICLES_COUNT, 0, 0, 0);
+      renderPass.end();
+    }
 
-  const commandEncoder = device.createCommandEncoder();
+    // submit all recorded commands
+    device.queue.submit([commandEncoder.finish()]);
 
-  // update particles positions and velocities
-  const computePass = commandEncoder.beginComputePass();
-  computePass.setPipeline(computePipeline);
-  computePass.setBindGroup(0, computeBindGroup);
-  const workgroupCount = Math.ceil(PARTICLES_COUNT / 64);
-  computePass.dispatchWorkgroups(workgroupCount);
-  computePass.end();
+    // request the next animation frame
+    requestAnimationFrame(frame);
+  }
 
-  // render particles
-  renderPassDescriptor.colorAttachments[0].view = context
-    .getCurrentTexture()
-    .createView();
-  const renderPass = commandEncoder.beginRenderPass(renderPassDescriptor);
-  renderPass.setBindGroup(0, renderBindGroup);
-  renderPass.setPipeline(renderPipeline);
-  renderPass.setVertexBuffer(0, vertexBuffer);
-  renderPass.setVertexBuffer(1, particleBuffer);
-  renderPass.setIndexBuffer(indexBuffer, "uint32");
-  renderPass.drawIndexed(numVertices, PARTICLES_COUNT, 0, 0, 0);
-  renderPass.end();
-
-  device.queue.submit([commandEncoder.finish()]);
+  // start the animation loop
   requestAnimationFrame(frame);
 }
-
-// resize canvas
-const observer = new ResizeObserver((entries) => {
-  for (const entry of entries) {
-    const { width, height } = entry.contentRect;
-    canvas.width = width;
-    canvas.height = height;
-  }
-});
-observer.observe(canvas);
-
-requestAnimationFrame(frame);
